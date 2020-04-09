@@ -4,9 +4,8 @@ import fetch from 'node-fetch'
 import FormData from 'form-data'
 import { sign, verify } from 'jsonwebtoken'
 import { randomBytes } from 'crypto'
-import Enmap from 'enmap'
 import { Flake } from '../Flake'
-
+import r from 'rethinkdb'
 
 const { 
     DISCORD_ID,
@@ -15,135 +14,65 @@ const {
     GOOGLE_SECRET,
     REDIS_URL,
     JWT_KEY,
-    DOMAIN
+    DOMAIN,
+    RETHINK,
+    RETHINK_PASSWORD,
+    RETHINK_USER,
+    RETHINK_PORT,
+    RETHINK_DB
  } = process.env
 
 // The structure of a user in the database.
 type User = {
     id: string,
-    discord?: { id: string, avatar: string, locale: string, username: string },
-    google?:  { id: string, avatar: string, locale: string, username: string }
+    discord?: string,
+    google?:  string,
+    username: string,
+    locale: string,
+    score: number,
+    avatar: string
 }
 
-const { server } = new ServiceServer({}, { prometheus: true, healthEndpoint: true }, REDIS_URL)
+const { server } = new ServiceServer({}, { prometheus: true, healthEndpoint: true, authRequired: false }, REDIS_URL)
 
 // The flake service for generating ids.
 const flake = new Flake
-// Enmap used for developement purposes.
-const db = new Enmap<string, User>()
+// Rethinkdb
+let db: r.Connection
 
-server.get('/oauth/discord', async (request, response) => {
-        const { code, state, redirect } = request.query
-        let { linkAccount } = request.query
-        const uri = `${DOMAIN}${parse(request.raw.url).pathname}`
-        // Check if we need to redirect the user to discord auth.
-        if (request.session.state !== state || !code || !state ) {
-            // Generating the random state.
-            const state = randomBytes(15).toString('hex')
-            response.redirect(`https://discordapp.com/api/oauth2/authorize?response_type=code&scope=identify&state=${state}&redirect_uri=${uri}&client_id=${DISCORD_ID}`)
-            // Store the data in the secured session.
-            Object.assign(request.session, { linkAccount, state, redirect })
-            return
+(async () => {
+    db = await r.connect({
+        host: RETHINK,
+        port: parseInt(RETHINK_PORT),
+        db: RETHINK_DB,
+        //password: "9TnSbk2b72jQd3PY6",
+        //user: "kuizz"
+    })
+})()
+
+async function getDiscordUserFromToken(code: string, uri: string) {
+    const formData = new FormData
+    formData.append('client_id', DISCORD_ID)
+    formData.append('client_secret', DISCORD_SECRET)
+    formData.append('grant_type', 'authorization_code')
+    formData.append('code', code)
+    formData.append('redirect_uri', uri)
+    formData.append('scope', 'identify')
+
+    const { access_token: discord_token } = await fetch('https://discordapp.com/api/v6/oauth2/token', {
+        method: 'POST',
+        body: formData,
+        headers: formData.getHeaders()
+    }).then(x => x.json())
+    
+    return await fetch('https://discordapp.com/api/v6/users/@me', {
+        headers: {
+            'Authorization': `Bearer ${discord_token}`
         }
-        
-        const formData = new FormData
-        formData.append('client_id', DISCORD_ID)
-        formData.append('client_secret', DISCORD_SECRET)
-        formData.append('grant_type', 'authorization_code')
-        formData.append('code', code)
-        formData.append('redirect_uri', uri)
-        formData.append('scope', 'identify')
+    }).then(x => x.json())
+}
 
-        const { access_token: discord_token } = await fetch('https://discordapp.com/api/v6/oauth2/token', {
-            method: 'POST',
-            body: formData,
-            headers: formData.getHeaders()
-        }).then(x => x.json())
-        
-        const { id, username, avatar, locale } = await fetch('https://discordapp.com/api/v6/users/@me', {
-            headers: {
-                'Authorization': `Bearer ${discord_token}`
-            }
-        }).then(x => x.json())
-
-        request.session.state = undefined
-
-        const { linkAccount: linkAccount_request, redirect_request } = request.session
-        let user: User
-        // First of all, we try to understand if there is a linkAccount token linked to this link request.
-        if(linkAccount_request) {
-            // We want to link an account
-            // Se we have a link token represents the user's token.
-            // We just have to retieve the user_id from the token.
-            // Don't forget to verify the validity of the token.
-            try {
-                const { id: account_id } = verify(linkAccount_request, JWT_KEY) as any
-                // Now we have the id corresponding to the user.
-                // Let's link the acocunt!
-                // but first we need to check if the account exists.
-                if (db.has(`user:${account_id}`)) {
-                    // Let's check if the account is already linked.
-                    user = db.get(`user:${account_id}`)
-                    if (user.discord) {
-                        // The user already have an discord account linked.
-                        // We deny the request
-                        return response.code(401)
-                    }
-                    // Lets create the link info.
-                    user.discord = { id, avatar, locale, username }
-                    // And we update the account in the database.
-                    db.set(`user:${account_id}`, user)
-
-                } else {
-                    // The user doesn't have an account.
-                    // We deny the request.
-                    return response.code(401)
-                }
-            } catch(e) {
-                // The token signature isn't ours, we deny the request.
-                return response.code(401)
-            }
-        } else {
-            // No link requested.
-            user = db.filter(user => user.discord && user.discord.id === id)[0]
-            if(!user) {
-                // No user in the database
-                // Let's create one!
-                user = {
-                    discord: { id, avatar, locale, username },
-                    id: flake.gen()
-                }
-                db.set(`user:${user.id}`, user)
-            }
-        }
-
-        const token = sign(user, JWT_KEY)
-        if(redirect_request) {
-            return response.redirect(`https://${redirect_request}?token=${token}`)
-        }
-        response.send(
-            response.serialize({
-                user: user,
-                access_token: token
-            })
-        )
-})
-
-server.get('/oauth/google', async (request, response) => {
-    const { code, state, redirect } = request.query
-    let { linkAccount } = request.query
-    const uri = `${DOMAIN}${parse(request.raw.url).pathname}`
-
-    // Check if we need to redirect the user to discord auth.
-    if (request.session.state !== state || !code || !state) {
-        // Generating the random state.
-        const state = randomBytes(15).toString('hex')
-        response.redirect(`https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=https://www.googleapis.com/auth/userinfo.profile&state=${state}&redirect_uri=${uri}&client_id=${GOOGLE_ID}`)
-        // Store the data in the secured session.
-        Object.assign(request.session, { linkAccount, state, redirect })
-        return
-    }
-
+async function getGoogleUserFromToken(code, uri) {
     const formData = new FormData
 
     formData.append('client_id', GOOGLE_ID)
@@ -159,68 +88,221 @@ server.get('/oauth/google', async (request, response) => {
     })
     .then(data => data.json())
     
-    const { id, name: username, picture: avatar, locale } = await fetch(`https://www.googleapis.com/oauth2/v2/userinfo?oauth_token=${access_token}`)
+    return await fetch(`https://www.googleapis.com/oauth2/v2/userinfo?oauth_token=${access_token}`)
     .then(x => x.json())
+}
+
+server.get('/oauth/discord', async (request, response) => {
+
+    const { code, state } = request.query
+    const uri = `${DOMAIN}${parse(request.raw.url).pathname}`
+
+    // Redirect
+    {
+        const { redirect, linkAccount } = request.query
+        // Check if we need to redirect the user to discord auth.
+        if (request.session.state !== state || !code || !state ) {
+            // Generating the random state.
+            const state = randomBytes(15).toString('hex')
+            response.redirect(`https://discordapp.com/api/oauth2/authorize?response_type=code&scope=identify&state=${state}&redirect_uri=${uri}&client_id=${DISCORD_ID}`)
+            // Store the data in the secured session.
+            Object.assign(request.session, { linkAccount, state, redirect })
+            return
+        }
+    }
 
     request.session.state = undefined
+    // Check the state.
+    const { redirect, linkAccount }: { redirect: string, linkAccount: string } = <any>request.session
 
-    const { linkAccount: linkAccount_request, redirect_request } = request.session
+    const discordUser = await getDiscordUserFromToken(code, uri)
+
     let user: User
-    // First of all, we try to understand if there is a linkAccount token linked to this link request.
-    if(linkAccount_request) {
-        // We want to link an account
-        // Se we have a link token represents the user's token.
-        // We just have to retieve the user_id from the token.
-        // Don't forget to verify the validity of the token.
-        try {
-            const { id: account_id } = verify(linkAccount_request, JWT_KEY) as any
-            // Now we have the id corresponding to the user.
-            // Let's link the acocunt!
-            // but first we need to check if the account exists.
-            if (db.has(`user:${account_id}`)) {
-                // Let's check if the account is already linked.
-                user = db.get(`user:${account_id}`)
-                if (user.google) {
-                    // The user already have a googne account linked.
-                    // We deny the request
-                    return response.code(401)
-                }
-                // Lets create the link info.
-                user.google = { id, avatar, locale, username }
-                // And we update the account in the database.
-                db.set(`user:${account_id}`, user)
 
+    if (linkAccount) {
+        // We try to verify the key.
+        try {
+            const tokenAccount = <User>verify(linkAccount, JWT_KEY)
+            // Check if the account exists
+            const exists = await r.db('kuizz')
+                            .table('users')
+                            .filter({ id: tokenAccount.id })
+                            .count()
+                            .eq(1)
+                            .run(db)
+            if(exists) {
+                const databaseAccount = <User>await r.db('kuizz')
+                    .table('users')
+                    .filter({ id: tokenAccount.id })
+                    .nth(0)
+                    .run(db)
+                if(!databaseAccount.discord) {
+                    databaseAccount.discord = discordUser.id
+                    await r.db('kuizz')
+                        .table('users')
+                        .update(databaseAccount)
+                        .run(db)
+                    user = databaseAccount
+                } else {
+                    response.code(400)
+                    response.send({ error: 'This account is already linked to a discord account.', code: 400 })
+                }
             } else {
-                // The user doesn't have an account.
-                // We deny the request.
-                return response.code(401)
+                response.code(400)
+                response.send({ error: 'The user do not exist.', code: 400 })
             }
-        } catch(e) {
-            // The token signature isn't ours, we deny the request.
-            return response.code(401)
+        } catch (error) {
+            response.code(400)
+            response.send({ error: 'This token isn\'t valid.', code: 400 })
         }
     } else {
-        // No link requested.
-        user = db.filter(user => user.google && user.google.id === id)[0]
-        if(!user) {
-            // No user in the database
-            // Let's create one!
+        const exists = await r.db('kuizz')
+                              .table('users')
+                              .filter({ discord: discordUser.id })
+                              .count()
+                              .eq(1)
+                              .run(db)
+        if(!exists) {
             user = {
-                google: { id, avatar, locale, username },
-                id: flake.gen()
+                id: flake.gen(),
+                username: discordUser.username,
+                avatar: `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png?size=256`,
+                locale: discordUser.locale,
+                score: 0,
+                discord: discordUser.id
             }
-            db.set(`user:${user.id}`, user)
+            await r.db('kuizz')
+                .table('users')
+                .insert(user)
+                .run(db)
+        } else {
+            user = <User>await r.db('kuizz')
+                          .table('users')
+                          .filter({ discord: discordUser.id })
+                          .nth(0)
+                          .run(db)
         }
     }
 
-    const token = sign(user, JWT_KEY)
-    if(redirect_request) {
-        return response.redirect(`https://${redirect_request}?token=${token}`)
+    if (user) {
+        const token = sign({ id: user.id, locale: user.locale }, JWT_KEY)
+
+        if(redirect) {
+            const redirectUrl = parse(redirect)
+            const myUrl = parse(uri)
+    
+            // check if the redirect is allowed.
+            if(redirectUrl.protocol === 'https' && redirectUrl.port === '443' && redirectUrl.host === myUrl.host) {
+                return response.redirect(`${redirectUrl}?token=${token}`)
+            }
+        }
+        return response.send(token)
     }
-    response.send(
-        response.serialize({
-            user: user,
-            access_token: token
-        })
-    )
+})
+
+server.get('/oauth/google', async (request, response) => {
+    const { code, state } = request.query
+    const uri = `${DOMAIN}${parse(request.raw.url).pathname}`
+
+    // Redirect
+    {
+        const { redirect, linkAccount } = request.query
+        // Check if we need to redirect the user to discord auth.
+        if (request.session.state !== state || !code || !state) {
+            // Generating the random state.
+            const state = randomBytes(15).toString('hex')
+            response.redirect(`https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=https://www.googleapis.com/auth/userinfo.profile&state=${state}&redirect_uri=${uri}&client_id=${GOOGLE_ID}`)
+            // Store the data in the secured session.
+            Object.assign(request.session, { linkAccount, state, redirect })
+            return
+        }
+    }
+
+    request.session.state = undefined
+    // Check the state.
+    const { redirect, linkAccount }: { redirect: string, linkAccount: string } = <any>request.session
+
+    const googleUser = await getGoogleUserFromToken(code, uri)
+
+    let user: User
+
+    if (linkAccount) {
+        // We try to verify the key.
+        try {
+            const tokenAccount = <User>verify(linkAccount, JWT_KEY)
+            // Check if the account exists
+            const exists = await r.db('kuizz')
+                            .table('users')
+                            .filter({ id: tokenAccount.id })
+                            .count()
+                            .eq(1)
+                            .run(db)
+            if(exists) {
+                const databaseAccount = <User>await r.db('kuizz')
+                    .table('users')
+                    .filter({ id: tokenAccount.id })
+                    .nth(0)
+                    .run(db)
+                if(!databaseAccount.google) {
+                    databaseAccount.google = googleUser.id
+                    await r.db('kuizz')
+                        .table('users')
+                        .update(databaseAccount)
+                        .run(db)
+                    user = databaseAccount
+                } else {
+                    response.code(400)
+                    response.send({ error: 'This account is already linked to a google account.', code: 400 })
+                }
+            } else {
+                response.code(400)
+                response.send({ error: 'The user do not exist.', code: 400 })
+            }
+        } catch (error) {
+            response.code(400)
+            response.send({ error: 'This token isn\'t valid.', code: 400 })
+        }
+    } else {
+        const exists = await r.db('kuizz')
+                              .table('users')
+                              .filter({ google: googleUser.id })
+                              .count()
+                              .eq(1)
+                              .run(db)
+        if(!exists) {
+            user = {
+                id: flake.gen(),
+                username: googleUser.name,
+                avatar: googleUser.picture,
+                locale: googleUser.locale,
+                score: 0,
+                google: googleUser.id
+            }
+            await r.db('kuizz')
+                .table('users')
+                .insert(user)
+                .run(db)
+        } else {
+            user = <User>await r.db('kuizz')
+                          .table('users')
+                          .filter({ google: googleUser.id })
+                          .nth(0)
+                          .run(db)
+        }
+    }
+
+    if (user) {
+        const token = sign({ id: user.id, locale: user.locale }, JWT_KEY)
+
+        if(redirect) {
+            const redirectUrl = parse(redirect)
+            const myUrl = parse(uri)
+    
+            // check if the redirect is allowed.
+            if(redirectUrl.protocol === 'https' && redirectUrl.port === '443' && redirectUrl.host === myUrl.host) {
+                return response.redirect(`${redirectUrl}?token=${token}`)
+            }
+        }
+        return response.send(token)
+    }
 })

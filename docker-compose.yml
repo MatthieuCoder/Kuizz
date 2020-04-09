@@ -3,12 +3,49 @@ version: '3'
 services: 
   redis:
     image: redis
-  program:
+  loginService:
+    image: matthis974/dockspace:kuizz-backend-service-4
     build: .
     links: 
       - redis
+      - rethink
     env_file: 
       - .env
     ports: 
-      - 3005:3000
+      - 810:3000
     restart: always
+    command: './loginService/LoginService.js'
+  questionsService:
+    image: matthis974/dockspace:kuizz-backend-service-4
+    build: .
+    links: 
+      - redis
+      - rethink
+    env_file: 
+      - .env
+    ports: 
+      - 811:3000
+    restart: always
+    command: './questionsService/QuestionsService.js'
+  usersService:
+    image: matthis974/dockspace:kuizz-backend-service-4
+    build: .
+    links: 
+      - redis
+      - rethink
+    env_file: 
+      - .env
+    ports: 
+      - 812:3000
+    restart: always
+    command: './usersService/UsersService.js'
+
+  rethink:
+    image: rethinkdb
+    ports: 
+      - 8082:8080
+    volumes: 
+      - data:/data
+    restart: always
+volumes: 
+  data: {}

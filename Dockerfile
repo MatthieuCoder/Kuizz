@@ -1,14 +1,14 @@
-FROM node:current-alpine
+FROM node as build
 
-ENV NODE_ENV=production
+WORKDIR /build
 
-RUN mkdir /app
-WORKDIR /app
+COPY . .
 
-COPY package.json ./
+RUN npm i -g typescript && yarn && yarn build
 
-RUN npm install --production
+FROM node
 
-COPY dist .
+COPY --from=build /build/dist .
+COPY --from=build /build/node_modules ./node_modules
 
-CMD ["node", "loginService/LoginService.js"]
+ENTRYPOINT ["node", "index"]

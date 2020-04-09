@@ -6,21 +6,30 @@
   "author": "Matthieu",
   "license": "MIT",
   "private": true,
+  "scripts": {
+    "build": "tsc -p .",
+    "dc:up": "yarn build && docker-compose build && docker-compose up"
+  },
   "dependencies": {
-    "@types/ioredis": "^4.14.9",
-    "@types/jsonwebtoken": "^8.3.9",
-    "@types/node": "^13.11.0",
-    "@types/node-fetch": "^2.5.5",
-    "enmap": "^5.2.4",
+    "@types/rethinkdb": "^2.3.14",
     "fastify": "^2.13.0",
     "fastify-cookie": "^3.6.0",
+    "fastify-cors": "^3.0.3",
     "fastify-session": "^3.3.0",
     "form-data": "^3.0.0",
     "ioredis": "^4.16.1",
-    "jose": "^1.25.0",
     "jsonwebtoken": "^8.5.1",
     "messagepack": "^1.1.10",
-    "msgpack5": "^4.2.1",
-    "node-fetch": "^2.6.0"
+    "msgpack": "^1.0.3",
+    "node-fetch": "^2.6.0",
+    "rethinkdb": "^2.4.2"
+  },
+  "devDependencies": {
+    "@types/ioredis": "^4.14.9",
+    "@types/jsonwebtoken": "^8.3.9",
+    "@types/msgpack": "^0.0.30",
+    "@types/msgpack5": "^3.4.1",
+    "@types/node": "^13.11.0",
+    "@types/node-fetch": "^2.5.5"
   }
 }
