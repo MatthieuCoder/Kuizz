@@ -1,4 +1,8 @@
-export class Flake {
+/**
+ * @copyright Matthieu
+ * Used to generate snowflake ids.
+ */
+export default class Flake {
     private seq: number
     private mid: number
     private timeOffset: any
@@ -107,4 +111,4 @@ export class Flake {
       return this.hexToDec(id)
     }
   }
-  
+module.exports = Flake

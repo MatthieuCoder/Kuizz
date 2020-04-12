@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: questions
+spec:
+  selector:
+    app: questions
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: ingress-questions
+spec:
+  rules:
+  - host: kuizz.matthieu-dev.xyz
+    http:
+      paths:
+      - path: /api/questions
+        backend:
+          serviceName: questions
+          servicePort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: questions
+spec:
+  selector:
+    matchLabels:
+      app: questions
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: questions
+    spec:
+      containers:
+      - name: questions
+        image: matthis974/dockspace:kuizz-backend-service-6
+        envFrom:
+        - configMapRef:
+            name: jwt-data
+        - configMapRef:
+            name: rethink-data
+        - configMapRef:
+            name: redis-data
+        - configMapRef:
+            name: cookie-data
+        ports:
+          - containerPort: 3000
+            name: http
+        command:
+          - node
+          - index.js
+          - ./questionsService/QuestionsService.js
+      imagePullSecrets:
+        - name: regcred

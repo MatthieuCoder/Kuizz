@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: login
+spec:
+  selector:
+    app: login
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: ingress-login
+spec:
+  rules:
+  - host: kuizz.matthieu-dev.xyz
+    http:
+      paths:
+      - path: /oauth/
+        backend:
+          serviceName: login
+          servicePort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: login
+spec:
+  selector:
+    matchLabels:
+      app: login
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: login
+    spec:
+      containers:
+      - name: login
+        image: matthis974/dockspace:kuizz-backend-service-6
+        envFrom:
+        - configMapRef:
+            name: oauth-data
+        - configMapRef:
+            name: jwt-data
+        - configMapRef:
+            name: rethink-data
+        - configMapRef:
+            name: redis-data
+        - configMapRef:
+            name: cookie-data
+        ports:
+          - containerPort: 3000
+            name: http
+        command:
+          - node
+          - index.js
+          - ./loginService/LoginService.js
+      imagePullSecrets:
+        - name: regcred

@@ -1,14 +1,13 @@
-FROM node as build
+FROM node as tsbuild
 
 WORKDIR /build
 
 COPY . .
-
-RUN npm i -g typescript && yarn && yarn build
+RUN yarn global add typescript && yarn && yarn build
 
 FROM node
+ENV NODE_ENV=production
+COPY --from=tsbuild /build/dist .
+COPY --from=tsbuild /build/node_modules ./node_modules
 
-COPY --from=build /build/dist .
-COPY --from=build /build/node_modules ./node_modules
-
-ENTRYPOINT ["node", "index"]
+ENTRYPOINT ["node"]

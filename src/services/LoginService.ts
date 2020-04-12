@@ -1,102 +1,76 @@
-import ServiceServer from '../ServiceServer'
+import ServiceServer from '../common/ServiceServer'
 import { parse } from 'url'
 import fetch from 'node-fetch'
 import FormData from 'form-data'
 import { sign, verify } from 'jsonwebtoken'
 import { randomBytes } from 'crypto'
-import { Flake } from '../Flake'
 import r from 'rethinkdb'
+import Flake from '../common/utils/Flake'
+import User, { AvatarSource } from '../common/dataStructures/User'
 
 const { 
     DISCORD_ID,
     DISCORD_SECRET,
     GOOGLE_ID,
     GOOGLE_SECRET,
-    REDIS_URL,
     JWT_KEY,
     DOMAIN,
-    RETHINK,
-    RETHINK_PASSWORD,
-    RETHINK_USER,
-    RETHINK_PORT,
-    RETHINK_DB
  } = process.env
 
-// The structure of a user in the database.
-type User = {
-    id: string,
-    discord?: string,
-    google?:  string,
-    username: string,
-    locale: string,
-    score: number,
-    avatar: string
-}
-
-const { server } = new ServiceServer({}, { prometheus: true, healthEndpoint: true, authRequired: false }, REDIS_URL)
-
+const { server } = new ServiceServer({ prometheus: true, healthEndpoint: true, authRequired: false })
 // The flake service for generating ids.
 const flake = new Flake
-// Rethinkdb
-let db: r.Connection
-
-(async () => {
-    db = await r.connect({
-        host: RETHINK,
-        port: parseInt(RETHINK_PORT),
-        db: RETHINK_DB,
-        //password: "9TnSbk2b72jQd3PY6",
-        //user: "kuizz"
-    })
-})()
-
+//#region Oauth code to token requests
+function buildFormData(data: any) {
+    const form = new FormData
+    for(const [key, value] of Object.entries(data)) {
+        form.append(key, value)
+    }
+    return form
+}
 async function getDiscordUserFromToken(code: string, uri: string) {
-    const formData = new FormData
-    formData.append('client_id', DISCORD_ID)
-    formData.append('client_secret', DISCORD_SECRET)
-    formData.append('grant_type', 'authorization_code')
-    formData.append('code', code)
-    formData.append('redirect_uri', uri)
-    formData.append('scope', 'identify')
-
+    const formData = buildFormData({
+        client_id: DISCORD_ID,
+        client_secret: DISCORD_SECRET,
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: uri,
+        scope: 'identify'
+    })
     const { access_token: discord_token } = await fetch('https://discordapp.com/api/v6/oauth2/token', {
         method: 'POST',
         body: formData,
         headers: formData.getHeaders()
     }).then(x => x.json())
-    
     return await fetch('https://discordapp.com/api/v6/users/@me', {
         headers: {
             'Authorization': `Bearer ${discord_token}`
         }
     }).then(x => x.json())
 }
-
-async function getGoogleUserFromToken(code, uri) {
-    const formData = new FormData
-
-    formData.append('client_id', GOOGLE_ID)
-    formData.append('client_secret', GOOGLE_SECRET)
-    formData.append('grant_type', 'authorization_code')
-    formData.append('code', code)
-    formData.append('redirect_uri', uri)
-
+async function getGoogleUserFromToken(code: string, uri: string) {
+    const formData = buildFormData({
+        client_id: GOOGLE_ID,
+        client_secret: GOOGLE_SECRET,
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: uri
+    })
     const { access_token } = await fetch(`https://oauth2.googleapis.com/token`, {
         method: 'POST',
         headers: formData.getHeaders(),
         body: formData
     })
     .then(data => data.json())
-    
     return await fetch(`https://www.googleapis.com/oauth2/v2/userinfo?oauth_token=${access_token}`)
     .then(x => x.json())
 }
+//#endregion
 
 server.get('/oauth/discord', async (request, response) => {
-
     const { code, state } = request.query
+    const { rethink } = request
     const uri = `${DOMAIN}${parse(request.raw.url).pathname}`
-
     // Redirect
     {
         const { redirect, linkAccount } = request.query
@@ -110,15 +84,11 @@ server.get('/oauth/discord', async (request, response) => {
             return
         }
     }
-
     request.session.state = undefined
-    // Check the state.
-    const { redirect, linkAccount }: { redirect: string, linkAccount: string } = <any>request.session
-
+    // Get the state.
+    const { redirect, linkAccount } = <{ redirect: string, linkAccount: string }><any>request.session
     const discordUser = await getDiscordUserFromToken(code, uri)
-
-    let user: User
-
+    
     if (linkAccount) {
         // We try to verify the key.
         try {
@@ -126,23 +96,26 @@ server.get('/oauth/discord', async (request, response) => {
             // Check if the account exists
             const exists = await r.db('kuizz')
                             .table('users')
-                            .filter({ id: tokenAccount.id })
+                            .filter({ id: tokenAccount.id } as User)
                             .count()
                             .eq(1)
-                            .run(db)
+                            .run(rethink)
             if(exists) {
                 const databaseAccount = <User>await r.db('kuizz')
                     .table('users')
                     .filter({ id: tokenAccount.id })
                     .nth(0)
-                    .run(db)
+                    .run(rethink)
                 if(!databaseAccount.discord) {
-                    databaseAccount.discord = discordUser.id
+                    databaseAccount.discord = { 
+                        avatar: `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png?size=256`,
+                        id: discordUser.id
+                    }
                     await r.db('kuizz')
                         .table('users')
                         .update(databaseAccount)
-                        .run(db)
-                    user = databaseAccount
+                        .run(rethink)
+                    request.user = databaseAccount
                 } else {
                     response.code(400)
                     response.send({ error: 'This account is already linked to a discord account.', code: 400 })
@@ -158,52 +131,65 @@ server.get('/oauth/discord', async (request, response) => {
     } else {
         const exists = await r.db('kuizz')
                               .table('users')
-                              .filter({ discord: discordUser.id })
+                              .filter({ discord: { id: discordUser.id } })
                               .count()
                               .eq(1)
-                              .run(db)
+                              .run(rethink)
         if(!exists) {
-            user = {
+            request.user = <User>{
                 id: flake.gen(),
+                discord: { 
+                    avatar: `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png?size=256`,
+                    id: discordUser.id
+                },
+                avatarSource: AvatarSource.Discord,
+                roles: 0x0,
                 username: discordUser.username,
-                avatar: `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png?size=256`,
                 locale: discordUser.locale,
-                score: 0,
-                discord: discordUser.id
+                reputation: 1,
+                wins: 0,
+                lost: 0
             }
             await r.db('kuizz')
                 .table('users')
-                .insert(user)
-                .run(db)
+                .insert(request.user)
+                .run(rethink)
         } else {
-            user = <User>await r.db('kuizz')
+            request.user = <User>await r.db('kuizz')
                           .table('users')
-                          .filter({ discord: discordUser.id })
+                          .filter({ discord: { id: discordUser.id } })
                           .nth(0)
-                          .run(db)
+                          .run(rethink)
+            if(request.user.discord.avatar !== `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png?size=256`) {
+                request.user.discord.avatar = `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png?size=256`
+                await r.db('kuizz')
+                        .table('users')
+                        .update(request.user)
+                        .run(rethink)
+            }
         }
     }
 
-    if (user) {
-        const token = sign({ id: user.id, locale: user.locale }, JWT_KEY)
-
+    if (request.user) {
+        const token = sign({ id: request.user.id, locale: request.user.locale, roles: request.user.roles }, JWT_KEY)
         if(redirect) {
             const redirectUrl = parse(redirect)
             const myUrl = parse(uri)
-    
             // check if the redirect is allowed.
-            if(redirectUrl.protocol === 'https' && redirectUrl.port === '443' && redirectUrl.host === myUrl.host) {
-                return response.redirect(`${redirectUrl}?token=${token}`)
+            if(redirectUrl.host === myUrl.host) {
+                return response.redirect(`${redirect}?token=${token}`)
             }
         }
         return response.send(token)
+    } else {
+        return response.send()
     }
 })
 
 server.get('/oauth/google', async (request, response) => {
     const { code, state } = request.query
     const uri = `${DOMAIN}${parse(request.raw.url).pathname}`
-
+    const { rethink } = request
     // Redirect
     {
         const { redirect, linkAccount } = request.query
@@ -219,13 +205,11 @@ server.get('/oauth/google', async (request, response) => {
     }
 
     request.session.state = undefined
-    // Check the state.
-    const { redirect, linkAccount }: { redirect: string, linkAccount: string } = <any>request.session
 
     const googleUser = await getGoogleUserFromToken(code, uri)
 
-    let user: User
-
+    // Get the state.
+    const { redirect, linkAccount } = <{ redirect: string, linkAccount: string }><any>request.session
     if (linkAccount) {
         // We try to verify the key.
         try {
@@ -233,23 +217,26 @@ server.get('/oauth/google', async (request, response) => {
             // Check if the account exists
             const exists = await r.db('kuizz')
                             .table('users')
-                            .filter({ id: tokenAccount.id })
+                            .filter({ id: tokenAccount.id } as User)
                             .count()
                             .eq(1)
-                            .run(db)
+                            .run(rethink)
             if(exists) {
                 const databaseAccount = <User>await r.db('kuizz')
                     .table('users')
                     .filter({ id: tokenAccount.id })
                     .nth(0)
-                    .run(db)
+                    .run(rethink)
                 if(!databaseAccount.google) {
-                    databaseAccount.google = googleUser.id
+                    databaseAccount.google = { 
+                        avatar: googleUser.picture,
+                        id: googleUser.id
+                    }
                     await r.db('kuizz')
                         .table('users')
                         .update(databaseAccount)
-                        .run(db)
-                    user = databaseAccount
+                        .run(rethink)
+                    request.user = databaseAccount
                 } else {
                     response.code(400)
                     response.send({ error: 'This account is already linked to a google account.', code: 400 })
@@ -264,45 +251,58 @@ server.get('/oauth/google', async (request, response) => {
         }
     } else {
         const exists = await r.db('kuizz')
-                              .table('users')
-                              .filter({ google: googleUser.id })
-                              .count()
-                              .eq(1)
-                              .run(db)
+                                .table('users')
+                                .filter({ google: { id: googleUser.id } })
+                                .count()
+                                .eq(1)
+                                .run(rethink)
         if(!exists) {
-            user = {
+            request.user = <User>{
                 id: flake.gen(),
+                google: { 
+                    avatar: googleUser.picture,
+                    id: googleUser.id
+                },
+                avatarSource: AvatarSource.Google,
+                roles: 0x0,
                 username: googleUser.name,
-                avatar: googleUser.picture,
                 locale: googleUser.locale,
-                score: 0,
-                google: googleUser.id
+                reputation: 1,
+                wins: 0,
+                lost: 0
             }
             await r.db('kuizz')
                 .table('users')
-                .insert(user)
-                .run(db)
+                .insert(request.user)
+                .run(rethink)
         } else {
-            user = <User>await r.db('kuizz')
-                          .table('users')
-                          .filter({ google: googleUser.id })
-                          .nth(0)
-                          .run(db)
+            request.user = <User>await r.db('kuizz')
+                            .table('users')
+                            .filter({ google: { id: googleUser.id } })
+                            .nth(0)
+                            .run(rethink)
+            if(request.user.discord.avatar !== googleUser.picture) {
+                request.user.discord.avatar = googleUser.picture
+                await r.db('kuizz')
+                        .table('users')
+                        .update(request.user)
+                        .run(rethink)
+            }
         }
     }
-
-    if (user) {
-        const token = sign({ id: user.id, locale: user.locale }, JWT_KEY)
-
+    
+    if (request.user) {
+        const token = sign({ id: request.user.id, locale: request.user.locale, roles: request.user.roles }, JWT_KEY)
         if(redirect) {
             const redirectUrl = parse(redirect)
             const myUrl = parse(uri)
-    
             // check if the redirect is allowed.
-            if(redirectUrl.protocol === 'https' && redirectUrl.port === '443' && redirectUrl.host === myUrl.host) {
-                return response.redirect(`${redirectUrl}?token=${token}`)
+            if(redirectUrl.host === myUrl.host) {
+                return response.redirect(`${redirect}?token=${token}`)
             }
         }
         return response.send(token)
+    } else {
+        return response.send()
     }
 })

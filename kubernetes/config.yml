@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oauth-data
+data:
+  DISCORD_ID: "604411571778879503"
+  DISCORD_SECRET: "oYLlFOgfNCF1hV2Ej8OLcQPY8yBRUMJ0"
+  GOOGLE_ID: "844566653603-o7v6sa7g5bfedg2gbk73npevl4099sd3.apps.googleusercontent.com"
+  GOOGLE_SECRET: "6IMZ-DVkJhb52fJsWvVNbnZ5"
+  DOMAIN: "https://kuizz.matthieu-dev.xyz"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jwt-data
+data:
+  JWT_KEY: "g8`8PCJFi5USx=B5^lTR$?<biIEST,%(C/U6>=Qbjthdf22hfW5AFy{iPkFZD&v"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rethink-data
+data:
+  RETHINK: "rethinkdb-rethinkdb-proxy.rethink"
+  RETHINK_PORT: "28015"
+  RETHINK_DB: "kuizz"
+  RETHINK_PASSWORD: "9TnSbk2b72jQd3PY6"
+  RETHINK_USER: "kuizz"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-data
+data:
+  REDIS: redis://redis
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cookie-data
+data:
+  SECRET: "B]SuaqPCS2m;5E0xL(Z.8vNSft5QP3c{fC`osbm)o/!tro5j51uo}b)37N9KvR["

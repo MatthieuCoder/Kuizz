@@ -3,49 +3,94 @@ version: '3'
 services: 
   redis:
     image: redis
-  loginService:
-    image: matthis974/dockspace:kuizz-backend-service-4
-    build: .
-    links: 
-      - redis
-      - rethink
-    env_file: 
-      - .env
-    ports: 
-      - 810:3000
     restart: always
-    command: './loginService/LoginService.js'
-  questionsService:
-    image: matthis974/dockspace:kuizz-backend-service-4
-    build: .
-    links: 
-      - redis
-      - rethink
-    env_file: 
-      - .env
     ports: 
-      - 811:3000
-    restart: always
-    command: './questionsService/QuestionsService.js'
-  usersService:
-    image: matthis974/dockspace:kuizz-backend-service-4
-    build: .
-    links: 
-      - redis
-      - rethink
-    env_file: 
-      - .env
-    ports: 
-      - 812:3000
-    restart: always
-    command: './usersService/UsersService.js'
-
+      - 6380:6379
+    networks: 
+      - internal
   rethink:
     image: rethinkdb
-    ports: 
-      - 8082:8080
     volumes: 
       - data:/data
+    networks: 
+      - internal
     restart: always
+    ports: 
+      - 8081:8080
+  login_service:
+    image: matthis974/dockspace:kuizz-backend-service-4
+    build: .
+    depends_on: 
+      - rethink
+      - redis
+    env_file: 
+      - .env
+    command: './services/LoginService.js'
+    networks: 
+      - internal
+    ports: 
+      - 3000:3000
+    labels: 
+      - "traefik.enable=true"
+      - "traefik.http.routers.login_service.rule=PathPrefix(`/oauth/`)"
+      - "traefik.http.routers.login_service.entrypoints=web"
+      - "traefik.port=3000"
+      - "traefik.network=internal"
+  questions_service:
+    image: matthis974/dockspace:kuizz-backend-service-4
+    build: .
+    depends_on: 
+      - rethink
+      - redis
+    env_file: 
+      - .env
+    command: './services/QuestionsService.js'
+    networks: 
+      - internal
+    ports: 
+      - 3001:3000
+    labels: 
+      - "traefik.enable=true"
+      - "traefik.http.routers.questions_service.rule=PathPrefix(`/api/questions`)"
+      - "traefik.http.routers.questions_service.entrypoints=web"
+      - "traefik.port=3000"
+      - "traefik.network=internal"
+  users_service:
+    image: matthis974/dockspace:kuizz-backend-service-4
+    build: .
+    depends_on: 
+      - rethink
+      - redis
+    env_file: 
+      - .env
+    command: './services/UsersService.js'
+    networks: 
+      - internal
+    labels: 
+      - "traefik.enable=true"
+      - "traefik.http.routers.users_service.rule=PathPrefix(`/api/users`)"
+      - "traefik.http.routers.users_service.entrypoints=web"
+      - "traefik.port=3000"
+      - "traefik.network=internal"
+    ports:
+      - 3002:3000
+  traefik:
+    image: "traefik:v2.2"
+    container_name: "traefik"
+    command:
+      #- "--log.level=DEBUG"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    networks: 
+      - internal
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
 volumes: 
   data: {}
+networks: 
+  internal: {}
