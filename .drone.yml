@@ -6,5 +6,6 @@ steps:
 - name: discord notification
   image: appleboy/drone-discord
   settings:
-    webhook_id: xxxxxxxxxx
-    webhook_token: xxxxxxxxxx
+    webhook_id: 699704720176054324
+    webhook_token:
+      from_secret: webhook_secret
