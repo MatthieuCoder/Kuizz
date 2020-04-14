@@ -1,0 +1,10 @@
+---
+kind: pipeline
+type: kubernetes
+name: Information
+steps:
+- name: discord notification
+  image: appleboy/drone-discord
+  settings:
+    webhook_id: xxxxxxxxxx
+    webhook_token: xxxxxxxxxx
