@@ -7,5 +7,4 @@ steps:
   image: appleboy/drone-discord
   settings:
     webhook_id: 699704720176054324
-    webhook_token:
-      from_secret: webhook_secret
+    secrets: [ webhook_id, webhook_secret ]
