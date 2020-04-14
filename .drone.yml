@@ -1,7 +1,7 @@
 ---
 kind: pipeline
 type: kubernetes
-name: Information
+name: server_webhook
 steps:
 - name: discord notification
   image: appleboy/drone-discord
